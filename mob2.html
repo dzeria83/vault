@@ -1,0 +1,153 @@
+<!DOCTYPE html>
+<html lang="ka">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>SHARDNET v12 // REAL-NET</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://unpkg.com/peerjs@1.5.2/dist/peerjs.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/crypto-js/4.1.1/crypto-js.min.js"></script>
+    <script src="https://unpkg.com/html5-qrcode"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
+    <style>
+        body { background: #010204; color: #4ade80; font-family: monospace; }
+        .mobile-card { background: #0a0f19; border: 1px solid #1e293b; border-radius: 12px; }
+        #reader { width: 100%; border-radius: 12px; overflow: hidden; background: #000; aspect-ratio: 1/1; }
+    </style>
+</head>
+<body class="p-4 flex flex-col h-screen overflow-hidden">
+
+    <header class="flex justify-between items-center mb-4 border-b border-slate-900 pb-2">
+        <div class="flex items-center gap-2">
+            <div id="statusDot" class="w-3 h-3 rounded-full bg-red-600"></div>
+            <span class="text-[10px] font-bold uppercase">Shardnet Real-Net</span>
+        </div>
+        <div id="netType" class="text-[8px] opacity-40 uppercase">Awaiting Connection</div>
+    </header>
+
+    <div class="mobile-card p-3 mb-4">
+        <code id="myId" class="text-[10px] text-white break-all bg-black/50 p-2 block rounded border border-green-900/20 active:bg-green-500 active:text-black">CONNECTING...</code>
+    </div>
+
+    <div class="space-y-3">
+        <div class="grid grid-cols-2 gap-2">
+            <button onclick="showMyQR()" class="bg-green-900/20 border border-green-500/30 p-3 rounded-xl text-[10px] font-bold uppercase">Show QR</button>
+            <button onclick="startScanner()" class="bg-blue-900/20 border border-blue-500/30 p-3 rounded-xl text-[10px] font-bold uppercase">Scan Peer</button>
+        </div>
+        <div id="reader" class="hidden border border-slate-700"></div>
+        <input type="password" id="meshKey" placeholder="🔐 Encryption Key" class="w-full bg-black border border-slate-800 p-3 rounded-xl text-sm text-white">
+        <input type="text" id="targetId" placeholder="📡 Partner Peer ID" class="w-full bg-black border border-slate-800 p-3 rounded-xl text-xs text-white">
+    </div>
+
+    <div id="chatBox" class="flex-1 overflow-y-auto my-4 space-y-2 text-[10px] p-2 bg-black/10 border border-slate-900 rounded-xl"></div>
+
+    <div class="pb-6">
+        <div class="flex gap-2">
+            <input type="file" id="fileIn" class="hidden" onchange="document.getElementById('fileLabel').innerText = this.files[0].name">
+            <label for="fileIn" id="fileLabel" class="flex-1 bg-slate-900 p-4 rounded-xl text-center text-[10px] font-bold border border-slate-800">📎 File</label>
+            <button id="executeBtn" class="flex-[2] bg-green-600 text-black p-4 rounded-xl text-[10px] font-bold uppercase">Transmit</button>
+        </div>
+    </div>
+
+    <div id="qrModal" class="hidden fixed inset-0 bg-black/95 z-50 flex flex-col items-center justify-center p-6" onclick="this.classList.add('hidden')">
+        <div id="qrcode" class="bg-white p-2 rounded-lg"></div>
+        <p class="mt-4 text-[10px] text-green-500 uppercase">Tap to close</p>
+    </div>
+
+    <script>
+        // კრიტიკული ცვლილება: TURN სერვერები რეალური ქსელური ტრანზიტისთვის
+        const peer = new Peer({
+            config: {
+                'iceServers': [
+                    { urls: 'stun:stun.l.google.com:19302' },
+                    { 
+                        urls: 'turn:openrelay.metered.ca:443', 
+                        username: 'openrelayproject', 
+                        credential: 'openrelayproject' 
+                    }
+                ],
+                'iceTransportPolicy': 'relay' // აიძულებს ქსელურ ტრანზიტს
+            }
+        });
+
+        let scanner = null;
+        let fileBuffer = {};
+
+        peer.on('open', id => {
+            document.getElementById('myId').textContent = id;
+            document.getElementById('statusDot').className = "w-3 h-3 rounded-full bg-green-500 shadow-[0_0_10px_#4ade80]";
+            document.getElementById('netType').textContent = "Relay Network Ready";
+        });
+
+        async function startScanner() {
+            const readerDiv = document.getElementById('reader');
+            readerDiv.classList.remove('hidden');
+            if (!scanner) scanner = new Html5Qrcode("reader");
+            try {
+                await scanner.start({ facingMode: "environment" }, { fps: 10, qrbox: 250 }, (text) => {
+                    document.getElementById('targetId').value = text;
+                    scanner.stop();
+                    readerDiv.classList.add('hidden');
+                });
+            } catch (err) { alert("HTTPS აუცილებელია კამერისთვის!"); }
+        }
+
+        function showMyQR() {
+            const id = document.getElementById('myId').innerText;
+            const qrd = document.getElementById("qrcode");
+            qrd.innerHTML = "";
+            new QRCode(qrd, { text: id, width: 200, height: 200 });
+            document.getElementById('qrModal').classList.remove('hidden');
+        }
+
+        document.getElementById('executeBtn').onclick = async () => {
+            const file = document.getElementById('fileIn').files[0];
+            const key = document.getElementById('meshKey').value;
+            const tid = document.getElementById('targetId').value;
+
+            if(!file || !key || !tid) return alert("მონაცემები აკლია!");
+
+            const buffer = await file.arrayBuffer();
+            const encrypted = CryptoJS.AES.encrypt(CryptoJS.lib.WordArray.create(buffer), key).toString();
+            const hash = CryptoJS.SHA256(encrypted).toString();
+
+            const conn = peer.connect(tid, { reliable: true });
+            conn.on('open', () => {
+                conn.send({ type: 'START', name: file.name, hash: hash, total: 16 });
+                const shardSize = Math.ceil(encrypted.length / 16);
+                for(let i=0; i<16; i++) {
+                    const chunk = encrypted.substring(i * shardSize, (i + 1) * shardSize);
+                    conn.send({ type: 'DATA', data: chunk, id: i });
+                }
+                document.getElementById('chatBox').innerHTML += `<div class='text-right opacity-40'>OUTGOING: ${file.name}</div>`;
+            });
+        };
+
+        peer.on('connection', conn => {
+            conn.on('data', data => {
+                if(data.type === 'START') fileBuffer = { parts: [], total: data.total, hash: data.hash, name: data.name, count: 0 };
+                if(data.type === 'DATA') {
+                    fileBuffer.parts[data.id] = data.data;
+                    fileBuffer.count++;
+                    if(fileBuffer.count === fileBuffer.total) assemble();
+                }
+            });
+        });
+
+        function assemble() {
+            const fullEnc = fileBuffer.parts.join('');
+            if(CryptoJS.SHA256(fullEnc).toString() !== fileBuffer.hash) return;
+            const key = document.getElementById('meshKey').value;
+            try {
+                const dec = CryptoJS.AES.decrypt(fullEnc, key);
+                const typedArray = new Uint8Array(dec.sigBytes);
+                for (let i = 0; i < dec.sigBytes; i++) {
+                    typedArray[i] = (dec.words[i >>> 2] >>> (24 - (i % 4) * 8)) & 0xff;
+                }
+                const url = URL.createObjectURL(new Blob([typedArray]));
+                document.getElementById('chatBox').innerHTML += `<div class="p-2 border border-green-900 rounded bg-green-900/10">✅ RECEIVED: ${fileBuffer.name} <br> <a href="${url}" download="${fileBuffer.name}" class="text-white underline font-bold">SAVE FILE</a></div>`;
+            } catch(e) { alert("KEY ERROR"); }
+        }
+    </script>
+</body>
+</html>
